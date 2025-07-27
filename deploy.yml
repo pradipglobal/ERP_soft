@@ -1,0 +1,65 @@
+name: Deploy ERP Flask App
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: 3.11
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Create .env
+        run: |
+          echo "SECRET_KEY=${{ secrets.SECRET_KEY }}" >> .env
+          echo "SQLALCHEMY_DATABASE_URI=${{ secrets.SQLALCHEMY_DATABASE_URI }}" >> .env
+          echo "FLASK_ENV=production" >> .env
+
+      - name: Build Docker image
+        run: docker build -t erp-flask .
+
+      - name: Deploy to EC2 via SCP and SSH
+        uses: appleboy/ssh-action@v0.1.10
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            docker stop erp-flask || true
+            docker rm erp-flask || true
+            docker rmi erp-flask || true
+            cd /home/${{ secrets.EC2_USER }}/erp-flask-app || mkdir /home/${{ secrets.EC2_USER }}/erp-flask-app && cd /home/${{ secrets.EC2_USER }}/erp-flask-app
+            rm -rf *
+            exit
+
+      - name: Upload project files to EC2
+        uses: appleboy/scp-action@v0.1.4
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          source: "./"
+          target: "/home/${{ secrets.EC2_USER }}/erp-flask-app"
+
+      - name: Rebuild and restart container
+        uses: appleboy/ssh-action@v0.1.10
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            cd /home/${{ secrets.EC2_USER }}/erp-flask-app
+            docker-compose up --build -d
